@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import json
+import re # <--- CAMBIO: Importa el módulo de expresiones regulares
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -23,7 +24,7 @@ BASE_TMDB_URL = "https://api.themoviedb.org/3"
 POSTER_BASE_URL = "https://image.tmdb.org/t/p/w500"
 MOVIES_DB_FILE = "movies.json"
 
-# <--- CAMBIO: CONSTANTES PARA TRAKT.TV
+# Constantes para Trakt.tv
 TRAKT_CLIENT_ID = "0b974d6a57bc0c54b5c8888faf253749879b2054f3470b0f70cdde45da8ccb78"
 TRAKT_CLIENT_SECRET = "b4a32e923d357f60d9e195348834b48981ae2efa963143f75050455ee333e2a"
 TRAKT_BASE_URL = "https://api.trakt.tv"
@@ -81,20 +82,13 @@ def find_movie_in_db(title_to_find):
     return None, None
 
 # 4. Funciones auxiliares para la API de TMDB
-def get_movie_details(movie_id):
-    url = f"{BASE_TMDB_URL}/movie/{movie_id}"
-    params = {"api_key": TMDB_API_KEY, "language": "es-ES"}
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error al conectar con la API de TMDB: {e}")
-        return None
-
-def get_movie_id_by_title(title):
+# <--- CAMBIO: Ahora la función acepta un año opcional
+def get_movie_id_by_title(title, year=None):
     url = f"{BASE_TMDB_URL}/search/movie"
     params = {"api_key": TMDB_API_KEY, "query": title, "language": "es-ES"}
+    if year:
+        params["year"] = year # <--- CAMBIO: Agrega el año a la búsqueda
+        
     try:
         response = requests.get(url, params=params)
         response.raise_for_status()
@@ -105,6 +99,17 @@ def get_movie_id_by_title(title):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error al buscar película en TMDB por título: {e}")
         return []
+
+def get_movie_details(movie_id):
+    url = f"{BASE_TMDB_URL}/movie/{movie_id}"
+    params = {"api_key": TMDB_API_KEY, "language": "es-ES"}
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error al conectar con la API de TMDB: {e}")
+        return None
 
 def get_popular_movies():
     url = f"{BASE_TMDB_URL}/movie/popular"
@@ -117,7 +122,6 @@ def get_popular_movies():
         logging.error(f"Error al obtener películas populares de TMDB: {e}")
         return []
 
-# <--- CAMBIO: NUEVA FUNCIÓN PARA LA API DE TRAKT.TV
 def trakt_api_search_movie(title):
     headers = {
         "Content-Type": "application/json",
@@ -132,7 +136,6 @@ def trakt_api_search_movie(title):
         response.raise_for_status()
         results = response.json()
         if results:
-            # Busca el primer resultado que tenga un ID de TMDB
             for result in results:
                 tmdb_id = result.get("movie", {}).get("ids", {}).get("tmdb")
                 if tmdb_id:
@@ -268,9 +271,10 @@ async def add_movie_start_by_text(message: types.Message, state: FSMContext):
         await message.reply("No tienes permiso para esta acción.")
         return
     
+    # <--- CAMBIO: Explica el nuevo formato con el año
     await message.reply(
         "Por favor, envía el título principal y todos los nombres de la película, seguidos por el enlace, en este formato:\n"
-        "Título Principal | Nombre_1, Nombre_2, Nombre_3 | Enlace_de_la_película"
+        "Título Principal (Año) | Nombre_1, Nombre_2, Nombre_3 | Enlace_de_la_película"
     )
     await state.set_state(MovieUploadStates.waiting_for_movie_info)
 
@@ -336,22 +340,32 @@ async def add_movie_info(message: types.Message, state: FSMContext):
     await state.clear()
     parts = message.text.split("|")
     if len(parts) < 3:
-        await message.reply("Formato incorrecto. Por favor, usa el formato: Título Principal | Nombres | Enlace")
+        await message.reply("Formato incorrecto. Por favor, usa el formato: Título Principal (Año) | Nombres | Enlace")
         return
-
-    main_title = parts[0].strip()
+    
+    main_title_with_year = parts[0].strip()
     names_str = parts[1].strip()
     movie_link = parts[2].strip()
-    
+
+    # <--- CAMBIO: Extrae el título y el año del formato
+    match = re.search(r'\((19|20)\d{2}\)', main_title_with_year)
+    if not match:
+        await message.reply("Formato de año incorrecto. Debe ser (YYYY).")
+        return
+        
+    year = match.group(0).replace('(', '').replace(')', '')
+    main_title = main_title_with_year.replace(match.group(0), '').strip()
+
     names = [name.strip() for name in names_str.split(',')]
 
-    await message.reply(f"Buscando '{main_title}' en TMDB...")
+    await message.reply(f"Buscando '{main_title}' del año {year} en TMDB...")
     
-    movie_id = get_movie_id_by_title(main_title)
+    # <--- CAMBIO: Pasa el año a la función de búsqueda
+    movie_id = get_movie_id_by_title(main_title, year)
     if not movie_id:
         await message.reply(
-            f"No se pudo encontrar la película '{main_title}' en TMDB. "
-            "Por favor, asegúrate de escribir el título correctamente."
+            f"No se pudo encontrar la película '{main_title}' del año {year} en TMDB. "
+            "Por favor, asegúrate de escribir el título y el año correctamente."
         )
         return
 
@@ -375,7 +389,7 @@ async def add_movie_again_callback(callback_query: types.CallbackQuery, state: F
     await bot.answer_callback_query(callback_query.id)
     await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        text="Por favor, envía la información de la siguiente película en el formato: Título Principal | Nombres | Enlace"
+        text="Por favor, envía la información de la siguiente película en el formato: Título Principal (Año) | Nombres | Enlace"
     )
     await state.set_state(MovieUploadStates.waiting_for_movie_info)
 
@@ -458,7 +472,6 @@ async def process_movie_request(message: types.Message, state: FSMContext):
     main_title, movie_info = find_movie_in_db(movie_title)
     
     if not movie_info:
-        # <--- CAMBIO: Intenta buscar en Trakt.tv si no está en la DB
         trakt_id = trakt_api_search_movie(movie_title)
         
         if trakt_id:
@@ -466,10 +479,8 @@ async def process_movie_request(message: types.Message, state: FSMContext):
                 [types.InlineKeyboardButton(text="📌 Publicar ahora esta película", callback_data=f"publish_now_from_trakt_{trakt_id}")]
             ])
             
-            # Guarda la solicitud del usuario
             user_requests[movie_title.lower()] = message.from_user.id
             
-            # Notifica al admin con el ID de la película
             await bot.send_message(
                 ADMIN_ID, 
                 f"El usuario {message.from_user.full_name} (@{message.from_user.username}) ha solicitado la película: <b>{movie_title}</b>\n\n"
@@ -486,7 +497,6 @@ async def process_movie_request(message: types.Message, state: FSMContext):
                 reply_markup=keyboard_user
             )
         else:
-            # Si no se encuentra ni en la DB ni en Trakt, se mantiene el flujo de agregar manualmente
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="➕ Agregar película solicitada", callback_data=f"add_requested_{movie_title}")]
             ])
@@ -538,7 +548,6 @@ async def process_movie_request(message: types.Message, state: FSMContext):
     else:
         await message.reply("Ocurrió un error al intentar publicar la película. Por favor, contacta al administrador.")
 
-# <--- CAMBIO: NUEVO MANEJADOR PARA PUBLICAR DIRECTAMENTE DESDE TRAKT
 @dp.callback_query(F.data.startswith("publish_now_from_trakt_"))
 async def publish_from_trakt(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_ID:
@@ -552,23 +561,16 @@ async def publish_from_trakt(callback_query: types.CallbackQuery):
         await bot.answer_callback_query(callback_query.id, "No se pudo obtener la información completa de la película desde TMDB.", show_alert=True)
         return
     
-    # Asume que si el admin presiona el botón, quiere agregar la película
-    # Se debe pedir el enlace manualmente
     await bot.send_message(
         ADMIN_ID, 
         f"Por favor, ahora envía el enlace de la película '{movie_data.get('title')}' para publicarla."
     )
     
-    # Se guarda el ID de TMDB para el siguiente paso
     await bot.answer_callback_query(callback_query.id)
     await bot.delete_message(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id)
 
-    # Iniciar un nuevo estado para pedir el enlace
-    await callback_query.message.answer(
-        "Por favor, envía el enlace de la película."
-    )
     await FSMContext.set_state(MovieUploadStates.waiting_for_requested_movie_info)
-    admin_data["tmdb_id"] = tmdb_id # Guarda temporalmente el ID para el siguiente paso
+    admin_data["tmdb_id"] = tmdb_id
 
 @dp.callback_query(F.data.startswith("add_requested_"))
 async def add_requested_movie_callback(callback_query: types.CallbackQuery, state: FSMContext):
@@ -578,16 +580,16 @@ async def add_requested_movie_callback(callback_query: types.CallbackQuery, stat
     
     requested_title = callback_query.data.split("add_requested_")[1]
     
-    # Guarda el título solicitado para usarlo en el siguiente estado
     await state.update_data(requested_title=requested_title)
     
     await bot.send_message(
         callback_query.from_user.id,
         f"Por favor, ahora envía la información de la película '{requested_title}' en el formato:\n"
-        "Título Principal | Nombre_1, Nombre_2, Nombre_3 | Enlace_de_la_película"
+        "Título Principal (Año) | Nombre_1, Nombre_2, Nombre_3 | Enlace_de_la_película"
     )
     await state.set_state(MovieUploadStates.waiting_for_requested_movie_info)
 
+# <--- CAMBIO: Este manejador ahora procesa tanto las películas nuevas como las solicitadas
 @dp.message(MovieUploadStates.waiting_for_requested_movie_info)
 async def process_requested_movie_info(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -600,22 +602,30 @@ async def process_requested_movie_info(message: types.Message, state: FSMContext
     
     parts = message.text.split("|")
     if len(parts) < 3:
-        await message.reply("Formato incorrecto. Por favor, usa el formato: Título Principal | Nombres | Enlace")
+        await message.reply("Formato incorrecto. Por favor, usa el formato: Título Principal (Año) | Nombres | Enlace")
         return
     
-    main_title = parts[0].strip()
+    main_title_with_year = parts[0].strip()
     names_str = parts[1].strip()
     movie_link = parts[2].strip()
     
+    match = re.search(r'\((19|20)\d{2}\)', main_title_with_year)
+    if not match:
+        await message.reply("Formato de año incorrecto. Debe ser (YYYY).")
+        return
+        
+    year = match.group(0).replace('(', '').replace(')', '')
+    main_title = main_title_with_year.replace(match.group(0), '').strip()
+
     names = [name.strip() for name in names_str.split(',')]
     
-    await message.reply(f"Buscando '{main_title}' en TMDB...")
+    await message.reply(f"Buscando '{main_title}' del año {year} en TMDB...")
     
-    movie_id = get_movie_id_by_title(main_title)
+    movie_id = get_movie_id_by_title(main_title, year)
     if not movie_id:
         await message.reply(
-            f"No se pudo encontrar la película '{main_title}' en TMDB. "
-            "Por favor, asegúrate de escribir el título correctamente."
+            f"No se pudo encontrar la película '{main_title}' del año {year} en TMDB. "
+            "Por favor, asegúrate de escribir el título y el año correctamente."
         )
         return
 
@@ -629,7 +639,6 @@ async def process_requested_movie_info(message: types.Message, state: FSMContext
     
     await state.clear()
     
-    # Publica la película en el canal después de agregarla
     movie_data = get_movie_details(movie_id)
     if movie_data:
         await delete_old_post(movie_data.get("id"))
