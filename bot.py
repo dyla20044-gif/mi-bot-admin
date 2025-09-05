@@ -36,6 +36,13 @@ recent_posts = deque(maxlen=20)
 # Almacenamiento temporal para solicitudes de usuarios y datos de admins
 user_requests = {}
 admin_data = {}
+memes = [
+    {"photo_url": "https://i.imgflip.com/64s72q.jpg", "caption": "Cuando te dicen que hay una película nueva... y es la que no querías."},
+    {"photo_url": "https://i.imgflip.com/71j22e.jpg", "caption": "Yo esperando la película que pedí en el canal..."},
+    {"photo_url": "https://i.imgflip.com/83p14j.jpg", "caption": "Mi reacción cuando el bot me dice que la película ya está en el catálogo."},
+    {"photo_url": "https://i.imgflip.com/4q3e3i.jpg", "caption": "Cuando me entero que la película que quiero ya está disponible en alta calidad."},
+    {"photo_url": "https://i.imgflip.com/776k1w.jpg", "caption": "Yo después de ver 3 películas seguidas en un día."}
+]
 
 # Configuración del logging
 logging.basicConfig(level=logging.INFO)
@@ -45,7 +52,7 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=Pars
 dp = Dispatcher()
 movies_db = {}
 AUTO_POST_COUNT = 4
-MOVIES_PER_PAGE = 5  # Películas por página en el catálogo
+MOVIES_PER_PAGE = 5
 
 # Estados para la máquina de estados de aiogram
 class MovieUploadStates(StatesGroup):
@@ -247,7 +254,7 @@ async def start_command(message: types.Message):
     else:
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="📽️ Pedir una película", callback_data="ask_for_movie")],
-            [types.InlineKeyboardButton(text="🎞️ Estrenos", callback_data="show_estrenos")] # <--- NUEVA FUNCIÓN
+            [types.InlineKeyboardButton(text="🎞️ Estrenos", callback_data="show_estrenos")]
         ])
         await message.reply(
             "¡Hola! Soy un bot que te ayuda a encontrar tus películas favoritas.\n\n"
@@ -789,38 +796,56 @@ async def publish_requested_movie(callback_query: types.CallbackQuery):
     else:
         await bot.send_message(callback_query.message.chat.id, f"Ocurrió un error al publicar '{requested_title}'.")
 
-# Nueva función para publicar noticias diarias
+# <--- NUEVA FUNCIÓN: Publicar noticias y memes
 async def automatic_news_post():
     while True:
         try:
-            popular_movies = get_popular_movies()
-            if popular_movies:
-                random_movie = random.choice(popular_movies)
-                title = random_movie.get("title")
-                vote_average = random_movie.get("vote_average", 0)
-                poster_path = random_movie.get("poster_path")
-                
-                text = (
-                    f"🎬 **Noticia del día: ¡Película popular!**\n\n"
-                    f"¿Sabías que **{title}** es una de las películas más populares del momento?\n"
-                    f"Su puntuación es de **{vote_average:.1f}/10**. ¡No te la pierdas!\n\n"
-                    f"¿Te gustaría verla? Pídela aquí: https://t.me/dylan_ad_bot"
-                )
-                
-                poster_url = f"{POSTER_BASE_URL}{poster_path}" if poster_path else None
-                
-                if poster_url:
-                    await bot.send_photo(chat_id=TELEGRAM_CHANNEL_ID, photo=poster_url, caption=text, parse_mode=ParseMode.MARKDOWN)
-                else:
-                    await bot.send_message(chat_id=TELEGRAM_CHANNEL_ID, text=text, parse_mode=ParseMode.MARKDOWN)
-                
-                logging.info(f"Noticia de película popular '{title}' publicada con éxito.")
+            # 1 en 3 de probabilidad de publicar un meme
+            if random.randint(1, 3) == 1:
+                selected_meme = random.choice(memes)
+                keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="📽️ ¿Quieres pedir una película? Pídela aquí", url="https://t.me/dylan_ad_bot")]
+                ])
+                await bot.send_photo(chat_id=TELEGRAM_CHANNEL_ID, photo=selected_meme["photo_url"], caption=selected_meme["caption"], reply_markup=keyboard)
+                logging.info("Meme de película publicado con éxito.")
             else:
-                logging.warning("No se pudieron obtener películas populares para la noticia.")
+                popular_movies = get_popular_movies()
+                if popular_movies:
+                    random_movie = random.choice(popular_movies)
+                    title = random_movie.get("title")
+                    vote_average = random_movie.get("vote_average", 0)
+                    poster_path = random_movie.get("poster_path")
+                    
+                    text = (
+                        f"🎬 **Noticia del día: ¡Película popular!**\n\n"
+                        f"¿Sabías que **{title}** es una de las películas más populares del momento?\n"
+                        f"Su puntuación es de **{vote_average:.1f}/10**. ¡No te la pierdas!\n\n"
+                    )
+                    
+                    poster_url = f"{POSTER_BASE_URL}{poster_path}" if poster_path else None
+                    
+                    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="👍 Me gusta", callback_data="like_post")],
+                        [types.InlineKeyboardButton(text="📽️ Pedir esta película", callback_data="ask_for_movie")]
+                    ])
+                    
+                    if poster_url:
+                        await bot.send_photo(chat_id=TELEGRAM_CHANNEL_ID, photo=poster_url, caption=text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+                    else:
+                        await bot.send_message(chat_id=TELEGRAM_CHANNEL_ID, text=text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+                    
+                    logging.info(f"Noticia de película popular '{title}' publicada con éxito.")
+                else:
+                    logging.warning("No se pudieron obtener películas populares para la noticia.")
         except Exception as e:
             logging.error(f"Error en la publicación automática de noticias: {e}")
             
         await asyncio.sleep(86400) # Espera 24 horas (86400 segundos)
+
+# <--- NUEVA FUNCIÓN: Manejador para el botón "Me gusta"
+@dp.callback_query(F.data == "like_post")
+async def like_post_callback(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id, "¡Gracias por tu like!")
 
 # Tarea de publicación automática
 async def automatic_movie_post():
