@@ -23,6 +23,11 @@ BASE_TMDB_URL = "https://api.themoviedb.org/3"
 POSTER_BASE_URL = "https://image.tmdb.org/t/p/w500"
 MOVIES_DB_FILE = "movies.json"
 
+# <--- CAMBIO: CONSTANTES PARA TRAKT.TV
+TRAKT_CLIENT_ID = "0b974d6a57bc0c54b5c8888faf253749879b2054f3470b0f70cdde45da8ccb78"
+TRAKT_CLIENT_SECRET = "b4a32e923d357f60d9e195348834b48981ae2efa963143f75050455ee333e2a"
+TRAKT_BASE_URL = "https://api.trakt.tv"
+
 # Almacenamiento de posts programados y posts recientes
 scheduled_posts = asyncio.Queue()
 recent_posts = deque(maxlen=20)
@@ -43,7 +48,7 @@ AUTO_POST_COUNT = 4
 # Estados para la máquina de estados de aiogram
 class MovieUploadStates(StatesGroup):
     waiting_for_movie_info = State()
-    waiting_for_requested_movie_info = State() # <-- CAMBIO: Estado para el flujo de solicitud
+    waiting_for_requested_movie_info = State()
 
 class MovieRequestStates(StatesGroup):
     waiting_for_movie_name = State()
@@ -112,6 +117,31 @@ def get_popular_movies():
         logging.error(f"Error al obtener películas populares de TMDB: {e}")
         return []
 
+# <--- CAMBIO: NUEVA FUNCIÓN PARA LA API DE TRAKT.TV
+def trakt_api_search_movie(title):
+    headers = {
+        "Content-Type": "application/json",
+        "trakt-api-version": "2",
+        "trakt-api-key": TRAKT_CLIENT_ID
+    }
+    url = f"{TRAKT_BASE_URL}/search/movie"
+    params = {"query": title}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        results = response.json()
+        if results:
+            # Busca el primer resultado que tenga un ID de TMDB
+            for result in results:
+                tmdb_id = result.get("movie", {}).get("ids", {}).get("tmdb")
+                if tmdb_id:
+                    return tmdb_id
+        return None
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error al buscar película en Trakt.tv: {e}")
+        return None
+
 # 5. Creación del mensaje de la película
 def create_movie_message(movie_data, movie_link=None):
     title = movie_data.get("title", "Título no disponible")
@@ -160,7 +190,7 @@ async def send_movie_post(chat_id, movie_data, movie_link):
     text, poster_url = create_movie_message(movie_data, movie_link)
     
     post_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🎬 ¿Quieres pedir una película?👇", url="https://t.me/dylan_ad_bot")]
+        [types.InlineKeyboardButton(text="🎬 ¿Quieres pedir una película? Pídela aquí 👇", url="https://t.me/dylan_ad_bot")]
     ])
 
     try:
@@ -428,27 +458,55 @@ async def process_movie_request(message: types.Message, state: FSMContext):
     main_title, movie_info = find_movie_in_db(movie_title)
     
     if not movie_info:
-        # <--- CAMBIO: Botón para agregar película directamente
-        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="➕ Agregar película solicitada", callback_data=f"add_requested_{movie_title}")]
-        ])
+        # <--- CAMBIO: Intenta buscar en Trakt.tv si no está en la DB
+        trakt_id = trakt_api_search_movie(movie_title)
         
-        user_requests[movie_title.lower()] = message.from_user.id
-        
-        await bot.send_message(
-            ADMIN_ID, 
-            f"El usuario {message.from_user.full_name} (@{message.from_user.username}) ha solicitado la película: <b>{movie_title}</b>", 
-            parse_mode=ParseMode.HTML, 
-            reply_markup=keyboard
-        )
-        
-        keyboard_user = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="📽️ Pedir otra película", callback_data="ask_for_movie")]
-        ])
-        await message.reply(
-            "Lo siento, esa película aún no está disponible. El administrador ha sido notificado de tu solicitud. ¡Pronto estará lista!",
-            reply_markup=keyboard_user
-        )
+        if trakt_id:
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="📌 Publicar ahora esta película", callback_data=f"publish_now_from_trakt_{trakt_id}")]
+            ])
+            
+            # Guarda la solicitud del usuario
+            user_requests[movie_title.lower()] = message.from_user.id
+            
+            # Notifica al admin con el ID de la película
+            await bot.send_message(
+                ADMIN_ID, 
+                f"El usuario {message.from_user.full_name} (@{message.from_user.username}) ha solicitado la película: <b>{movie_title}</b>\n\n"
+                f"ℹ️ **Se encontró en Trakt.tv con ID de TMDB:** `{trakt_id}`",
+                parse_mode=ParseMode.HTML, 
+                reply_markup=keyboard
+            )
+            
+            keyboard_user = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="📽️ Pedir otra película", callback_data="ask_for_movie")]
+            ])
+            await message.reply(
+                "La película que solicitaste no está en la base de datos, pero el administrador ha sido notificado para que pueda revisarla. ¡Pronto estará lista!",
+                reply_markup=keyboard_user
+            )
+        else:
+            # Si no se encuentra ni en la DB ni en Trakt, se mantiene el flujo de agregar manualmente
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="➕ Agregar película solicitada", callback_data=f"add_requested_{movie_title}")]
+            ])
+            
+            user_requests[movie_title.lower()] = message.from_user.id
+            
+            await bot.send_message(
+                ADMIN_ID, 
+                f"El usuario {message.from_user.full_name} (@{message.from_user.username}) ha solicitado la película: <b>{movie_title}</b>", 
+                parse_mode=ParseMode.HTML, 
+                reply_markup=keyboard
+            )
+            
+            keyboard_user = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="📽️ Pedir otra película", callback_data="ask_for_movie")]
+            ])
+            await message.reply(
+                "Lo siento, esa película aún no está disponible. El administrador ha sido notificado de tu solicitud. ¡Pronto estará lista!",
+                reply_markup=keyboard_user
+            )
         return
 
     movie_id = movie_info.get("id")
@@ -474,13 +532,44 @@ async def process_movie_request(message: types.Message, state: FSMContext):
             [types.InlineKeyboardButton(text="📽️ Pedir otra película", callback_data="ask_for_movie")]
         ])
         await message.reply(
-            f"✅ Tu película fue publicada en el canal principal. <a href='https://t.me/+q6K4fziWO_AxN2Rh'>Haz clic aquí para verla.</a>",
+            f"✅ Tu película fue publicada en el canal principal. <a href='https://t.me/+C8xLlSwkqSc3ZGU5'>Haz clic aquí para verla.</a>",
             reply_markup=keyboard
         )
     else:
         await message.reply("Ocurrió un error al intentar publicar la película. Por favor, contacta al administrador.")
 
-# <--- CAMBIO: NUEVO MANEJADOR PARA EL BOTÓN "AGREGAR PELÍCULA SOLICITADA"
+# <--- CAMBIO: NUEVO MANEJADOR PARA PUBLICAR DIRECTAMENTE DESDE TRAKT
+@dp.callback_query(F.data.startswith("publish_now_from_trakt_"))
+async def publish_from_trakt(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await bot.answer_callback_query(callback_query.id, "No tienes permiso para esta acción.")
+        return
+    
+    tmdb_id = int(callback_query.data.split("_")[-1])
+    
+    movie_data = get_movie_details(tmdb_id)
+    if not movie_data:
+        await bot.answer_callback_query(callback_query.id, "No se pudo obtener la información completa de la película desde TMDB.", show_alert=True)
+        return
+    
+    # Asume que si el admin presiona el botón, quiere agregar la película
+    # Se debe pedir el enlace manualmente
+    await bot.send_message(
+        ADMIN_ID, 
+        f"Por favor, ahora envía el enlace de la película '{movie_data.get('title')}' para publicarla."
+    )
+    
+    # Se guarda el ID de TMDB para el siguiente paso
+    await bot.answer_callback_query(callback_query.id)
+    await bot.delete_message(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id)
+
+    # Iniciar un nuevo estado para pedir el enlace
+    await callback_query.message.answer(
+        "Por favor, envía el enlace de la película."
+    )
+    await FSMContext.set_state(MovieUploadStates.waiting_for_requested_movie_info)
+    admin_data["tmdb_id"] = tmdb_id # Guarda temporalmente el ID para el siguiente paso
+
 @dp.callback_query(F.data.startswith("add_requested_"))
 async def add_requested_movie_callback(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_ID:
@@ -499,7 +588,6 @@ async def add_requested_movie_callback(callback_query: types.CallbackQuery, stat
     )
     await state.set_state(MovieUploadStates.waiting_for_requested_movie_info)
 
-# <--- CAMBIO: NUEVO MANEJADOR PARA PROCESAR LA PELÍCULA SOLICITADA
 @dp.message(MovieUploadStates.waiting_for_requested_movie_info)
 async def process_requested_movie_info(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
