@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import json
-import re # <--- CAMBIO: Importa el módulo de expresiones regulares
+import re
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -45,6 +45,7 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=Pars
 dp = Dispatcher()
 movies_db = {}
 AUTO_POST_COUNT = 4
+MOVIES_PER_PAGE = 5  # Películas por página en el catálogo
 
 # Estados para la máquina de estados de aiogram
 class MovieUploadStates(StatesGroup):
@@ -82,12 +83,11 @@ def find_movie_in_db(title_to_find):
     return None, None
 
 # 4. Funciones auxiliares para la API de TMDB
-# <--- CAMBIO: Ahora la función acepta un año opcional
 def get_movie_id_by_title(title, year=None):
     url = f"{BASE_TMDB_URL}/search/movie"
     params = {"api_key": TMDB_API_KEY, "query": title, "language": "es-ES"}
     if year:
-        params["year"] = year # <--- CAMBIO: Agrega el año a la búsqueda
+        params["year"] = year
         
     try:
         response = requests.get(url, params=params)
@@ -230,7 +230,7 @@ async def start_command(message: types.Message):
     if user_id == ADMIN_ID:
         keyboard = types.ReplyKeyboardMarkup(
             keyboard=[
-                [types.KeyboardButton(text="➕ Agregar película"), types.KeyboardButton(text="📋 Ver películas")],
+                [types.KeyboardButton(text="➕ Agregar película"), types.KeyboardButton(text="📋 Ver catálogo")],
                 [types.KeyboardButton(text="⚙️ Configuración auto-publicación")]
             ],
             resize_keyboard=True
@@ -239,19 +239,21 @@ async def start_command(message: types.Message):
             "¡Hola, Administrador! Elige una opción:\n\n"
             "**Opciones de Administrador:**\n"
             "➕ **Agregar película:** Agrega una nueva película a la base de datos.\n"
-            "📋 **Ver películas:** Muestra una lista de todas las películas que has agregado.\n"
+            "📋 **Ver catálogo:** Revisa las películas existentes y publícalas si lo deseas.\n"
             "⚙️ **Configuración auto-publicación:** Cambia la cantidad de publicaciones automáticas al día.",
             reply_markup=keyboard,
             parse_mode=ParseMode.MARKDOWN
         )
     else:
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="📽️ Pedir una película", callback_data="ask_for_movie")]
+            [types.InlineKeyboardButton(text="📽️ Pedir una película", callback_data="ask_for_movie")],
+            [types.InlineKeyboardButton(text="🎞️ Estrenos", callback_data="show_estrenos")] # <--- NUEVA FUNCIÓN
         ])
         await message.reply(
             "¡Hola! Soy un bot que te ayuda a encontrar tus películas favoritas.\n\n"
             "**¿Qué puedo hacer?**\n"
             "🎬 **Buscar películas:** Haz clic en el botón de abajo para solicitar una película. Si está en mi base de datos, la publicaré al instante en el canal.\n"
+            "🎞️ **Estrenos:** Descubre qué películas populares ya están en nuestro catálogo.\n"
             "🔗 **Acceso rápido:** Si la película que buscas ya está en el canal, te enviaré un enlace para que la encuentres fácilmente.",
             reply_markup=keyboard,
             parse_mode=ParseMode.MARKDOWN
@@ -271,12 +273,84 @@ async def add_movie_start_by_text(message: types.Message, state: FSMContext):
         await message.reply("No tienes permiso para esta acción.")
         return
     
-    # <--- CAMBIO: Explica el nuevo formato con el año
     await message.reply(
         "Por favor, envía el título principal y todos los nombres de la película, seguidos por el enlace, en este formato:\n"
         "Título Principal (Año) | Nombre_1, Nombre_2, Nombre_3 | Enlace_de_la_película"
     )
     await state.set_state(MovieUploadStates.waiting_for_movie_info)
+
+# <--- NUEVA FUNCIÓN: Ver catálogo de películas
+@dp.message(F.text == "📋 Ver catálogo")
+async def view_catalog_by_text(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.reply("No tienes permiso para esta acción.")
+        return
+    
+    if not movies_db:
+        await message.reply("Aún no hay películas en la base de datos.")
+        return
+    
+    await send_catalog_page(message.chat.id, 0)
+
+async def send_catalog_page(chat_id, page):
+    movie_items = list(movies_db.items())
+    start = page * MOVIES_PER_PAGE
+    end = start + MOVIES_PER_PAGE
+    
+    page_movies = movie_items[start:end]
+    total_pages = (len(movie_items) + MOVIES_PER_PAGE - 1) // MOVIES_PER_PAGE
+    
+    text = f"**Catálogo de Películas** (Página {page + 1}/{total_pages})\n\n"
+    keyboard_buttons = []
+    
+    for _, data in page_movies:
+        title = data.get("names")[0] if "names" in data and data.get("names") else "Título desconocido"
+        movie_id = data.get("id")
+        text += f"🎬 {title}\n"
+        keyboard_buttons.append([types.InlineKeyboardButton(text=f"Publicar '{title}'", callback_data=f"publish_from_catalog_{movie_id}")])
+    
+    pagination_buttons = []
+    if page > 0:
+        pagination_buttons.append(types.InlineKeyboardButton(text="⬅️ Anterior", callback_data=f"catalog_page_{page-1}"))
+    if page + 1 < total_pages:
+        pagination_buttons.append(types.InlineKeyboardButton(text="Siguiente ➡️", callback_data=f"catalog_page_{page+1}"))
+        
+    if pagination_buttons:
+        keyboard_buttons.append(pagination_buttons)
+        
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+    await bot.send_message(chat_id, text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+
+# <--- NUEVA FUNCIÓN: Manejador de navegación del catálogo
+@dp.callback_query(F.data.startswith("catalog_page_"))
+async def navigate_catalog(callback_query: types.CallbackQuery):
+    page = int(callback_query.data.split("_")[-1])
+    await bot.delete_message(chat_id=callback_query.message.chat.id, message_id=callback_query.message.message_id)
+    await send_catalog_page(callback_query.message.chat.id, page)
+
+# <--- NUEVA FUNCIÓN: Publicar película desde el catálogo
+@dp.callback_query(F.data.startswith("publish_from_catalog_"))
+async def publish_from_catalog(callback_query: types.CallbackQuery):
+    movie_id = int(callback_query.data.split("_")[-1])
+    
+    movie_info = next((v for v in movies_db.values() if v['id'] == movie_id), None)
+    if not movie_info:
+        await bot.answer_callback_query(callback_query.id, "Error: película no encontrada en la base de datos.", show_alert=True)
+        return
+        
+    movie_data = get_movie_details(movie_id)
+    if not movie_data:
+        await bot.answer_callback_query(callback_query.id, "No se pudo obtener la información de la película. No se puede publicar.", show_alert=True)
+        return
+    
+    await delete_old_post(movie_id)
+    
+    success, _ = await send_movie_post(TELEGRAM_CHANNEL_ID, movie_data, movie_info.get("link"))
+    
+    if success:
+        await bot.answer_callback_query(callback_query.id, "✅ Película publicada con éxito.", show_alert=True)
+    else:
+        await bot.answer_callback_query(callback_query.id, "Ocurrió un error al publicar la película.", show_alert=True)
 
 @dp.message(F.text == "📋 Ver películas")
 async def view_movies_by_text(message: types.Message):
@@ -347,7 +421,6 @@ async def add_movie_info(message: types.Message, state: FSMContext):
     names_str = parts[1].strip()
     movie_link = parts[2].strip()
 
-    # <--- CAMBIO: Extrae el título y el año del formato
     match = re.search(r'\((19|20)\d{2}\)', main_title_with_year)
     if not match:
         await message.reply("Formato de año incorrecto. Debe ser (YYYY).")
@@ -360,7 +433,6 @@ async def add_movie_info(message: types.Message, state: FSMContext):
 
     await message.reply(f"Buscando '{main_title}' del año {year} en TMDB...")
     
-    # <--- CAMBIO: Pasa el año a la función de búsqueda
     movie_id = get_movie_id_by_title(main_title, year)
     if not movie_id:
         await message.reply(
@@ -454,6 +526,30 @@ async def final_schedule_callback(callback_query: types.CallbackQuery):
         message_id=callback_query.message.message_id,
         text=f"✅ Película programada para publicación."
     )
+
+# <--- NUEVA FUNCIÓN: Manejador para el botón de Estrenos de usuario
+@dp.callback_query(F.data == "show_estrenos")
+async def show_estrenos_callback(callback_query: types.CallbackQuery):
+    if not movies_db:
+        await bot.answer_callback_query(callback_query.id, "Aún no hay películas en el catálogo. ¡Pronto habrá!", show_alert=True)
+        return
+        
+    movies_by_date = sorted(movies_db.values(), key=lambda x: x.get('last_message_id', 0), reverse=True)
+    recent_movies = movies_by_date[:10] # Muestra las 10 películas más recientes
+
+    text = "**🎞️ ¡Estrenos!**\n\nAquí tienes las últimas películas agregadas al catálogo. Si quieres ver una, solo escribe su nombre completo.\n\n"
+    keyboard_buttons = []
+    
+    for movie in recent_movies:
+        title = movie.get("names")[0] if "names" in movie and movie.get("names") else "Título desconocido"
+        text += f"- {title}\n"
+    
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📽️ Pedir una película", callback_data="ask_for_movie")]
+    ])
+    
+    await bot.answer_callback_query(callback_query.id)
+    await bot.send_message(callback_query.message.chat.id, text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
 @dp.callback_query(F.data == "ask_for_movie")
 async def ask_for_movie_callback(callback_query: types.CallbackQuery, state: FSMContext):
@@ -589,7 +685,6 @@ async def add_requested_movie_callback(callback_query: types.CallbackQuery, stat
     )
     await state.set_state(MovieUploadStates.waiting_for_requested_movie_info)
 
-# <--- CAMBIO: Este manejador ahora procesa tanto las películas nuevas como las solicitadas
 @dp.message(MovieUploadStates.waiting_for_requested_movie_info)
 async def process_requested_movie_info(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
