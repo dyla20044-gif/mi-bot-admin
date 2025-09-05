@@ -29,7 +29,7 @@ recent_posts = deque(maxlen=20)
 
 # Almacenamiento temporal para solicitudes de usuarios y datos de admins
 user_requests = {}
-admin_data = {} # <--- CAMBIO: Para guardar datos temporales del admin
+admin_data = {}
 
 # Configuración del logging
 logging.basicConfig(level=logging.INFO)
@@ -43,7 +43,7 @@ AUTO_POST_COUNT = 4
 # Estados para la máquina de estados de aiogram
 class MovieUploadStates(StatesGroup):
     waiting_for_movie_info = State()
-    waiting_for_requested_movie_info = State() # <--- CAMBIO: Nuevo estado para solicitudes
+    waiting_for_requested_movie_info = State() # <-- CAMBIO: Estado para el flujo de solicitud
 
 class MovieRequestStates(StatesGroup):
     waiting_for_movie_name = State()
@@ -101,7 +101,6 @@ def get_movie_id_by_title(title):
         logging.error(f"Error al buscar película en TMDB por título: {e}")
         return []
 
-# <--- CAMBIO: NUEVA FUNCIÓN PARA OBTENER PELÍCULAS POPULARES
 def get_popular_movies():
     url = f"{BASE_TMDB_URL}/movie/popular"
     params = {"api_key": TMDB_API_KEY, "language": "es-ES", "page": 1}
@@ -161,7 +160,7 @@ async def send_movie_post(chat_id, movie_data, movie_link):
     text, poster_url = create_movie_message(movie_data, movie_link)
     
     post_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🎬 ¿Quieres pedir una película? Pídela aquí 👇", url="https://t.me/dylan_ad_bot")]
+        [types.InlineKeyboardButton(text="🎬 ¿Quieres pedir una película?👇", url="https://t.me/dylan_ad_bot")]
     ])
 
     try:
@@ -475,7 +474,7 @@ async def process_movie_request(message: types.Message, state: FSMContext):
             [types.InlineKeyboardButton(text="📽️ Pedir otra película", callback_data="ask_for_movie")]
         ])
         await message.reply(
-            f"✅ Tu película fue publicada en el canal principal. <a href='https://t.me/+C8xLlSwkqSc3ZGU5'>Haz clic aquí para verla.</a>",
+            f"✅ Tu película fue publicada en el canal principal. <a href='https://t.me/+q6K4fziWO_AxN2Rh'>Haz clic aquí para verla.</a>",
             reply_markup=keyboard
         )
     else:
@@ -598,7 +597,7 @@ async def publish_requested_movie(callback_query: types.CallbackQuery):
     else:
         await bot.send_message(callback_query.message.chat.id, f"Ocurrió un error al publicar '{requested_title}'.")
 
-# <--- CAMBIO: NUEVA FUNCIÓN PARA PUBLICAR NOTICIAS DIARIAS
+# Nueva función para publicar noticias diarias
 async def automatic_news_post():
     while True:
         try:
@@ -706,7 +705,7 @@ async def main():
     
     asyncio.create_task(automatic_movie_post())
     asyncio.create_task(scheduled_posts_task())
-    asyncio.create_task(automatic_news_post()) # <--- CAMBIO: Inicia la tarea de noticias
+    asyncio.create_task(automatic_news_post())
     
     await dp.start_polling(bot)
 
