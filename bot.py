@@ -12,6 +12,7 @@ from collections import deque
 import datetime
 import time
 import random
+from webserver import keep_alive # Importa la función keep_alive
 
 # 1. Configuración de credenciales y constantes
 TELEGRAM_BOT_TOKEN = "8470210495:AAHSMzLftU9Gqrl9sNEEp_IUo7WYFSXH1HU"
@@ -24,7 +25,7 @@ MOVIES_DB_FILE = "movies.json"
 
 # Almacenamiento de posts programados y posts recientes
 scheduled_posts = asyncio.Queue()
-recent_posts = deque(maxlen=20) # Para evitar publicar la misma peli en un corto periodo
+recent_posts = deque(maxlen=20)
 
 # Almacenamiento temporal para solicitudes de usuarios
 user_requests = {}
@@ -36,7 +37,7 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 movies_db = {}
-AUTO_POST_COUNT = 4 # Valor por defecto de publicaciones automáticas al día
+AUTO_POST_COUNT = 4
 
 # Estados para la máquina de estados de aiogram
 class MovieUploadStates(StatesGroup):
@@ -188,12 +189,35 @@ async def start_command(message: types.Message):
             ],
             resize_keyboard=True
         )
-        await message.reply("¡Hola, Administrador! Elige una opción:", reply_markup=keyboard)
+        await message.reply(
+            "¡Hola, Administrador! Elige una opción:\n\n"
+            "**Opciones de Administrador:**\n"
+            "➕ **Agregar película:** Agrega una nueva película a la base de datos.\n"
+            "📋 **Ver películas:** Muestra una lista de todas las películas que has agregado.\n"
+            "⚙️ **Configuración auto-publicación:** Cambia la cantidad de publicaciones automáticas al día.",
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN
+        )
     else:
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="📽️ Pedir una película", callback_data="ask_for_movie")]
         ])
-        await message.reply("¡Hola! Soy un bot para pedir tus películas favoritas.", reply_markup=keyboard)
+        await message.reply(
+            "¡Hola! Soy un bot que te ayuda a encontrar tus películas favoritas.\n\n"
+            "**¿Qué puedo hacer?**\n"
+            "🎬 **Buscar películas:** Haz clic en el botón de abajo para solicitar una película. Si está en mi base de datos, la publicaré al instante en el canal.\n"
+            "🔗 **Acceso rápido:** Si la película que buscas ya está en el canal, te enviaré un enlace para que la encuentres fácilmente.",
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+# Manejador para eliminar mensajes de spam (usa el dominio como filtro)
+@dp.message(F.text.contains("ordershunter.ru"))
+async def delete_spam_message(message: types.Message):
+    try:
+        await message.delete()
+    except Exception as e:
+        logging.error(f"No se pudo eliminar el mensaje de spam: {e}")
 
 @dp.message(F.text == "➕ Agregar película")
 async def add_movie_start_by_text(message: types.Message, state: FSMContext):
@@ -556,4 +580,5 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+    keep_alive()
     asyncio.run(main())
