@@ -19,7 +19,7 @@ from webserver import keep_alive
 # 1. Configuración de credenciales y constantes
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
-TELEGRAM_CHANNEL_ID = -1002139779491
+TELEGRAM_CHANNEL_ID = -1001945286271
 ADMIN_ID = 6115976248
 BASE_TMDB_URL = "https://api.themoviedb.org/3"
 POSTER_BASE_URL = "https://image.tmdb.org/t/p/w500"
