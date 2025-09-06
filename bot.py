@@ -3,31 +3,41 @@ import logging
 import json
 import re
 import os
+import requests
+from collections import deque
+import datetime
+import time
+import random
+
+# Importamos dotenv para cargar las variables de entorno localmente
+from dotenv import load_dotenv
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-import requests
-from collections import deque
-import datetime
-import time
-import random
-from webserver import keep_alive
+
+# Carga las variables de entorno del archivo .env
+load_dotenv()
 
 # 1. Configuración de credenciales y constantes
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TMDB_API_KEY = os.getenv("TMDB_API_KEY")
-TELEGRAM_CHANNEL_ID = -1001945286271
-ADMIN_ID = 6115976248
+# --- TOKENS HARDCODEADOS PARA PRUEBAS LOCALES ---
+TELEGRAM_BOT_TOKEN = "8470210495:AAHSMzLftU9Gqrl9sNEEp_IUo7WYFSXH1HU"
+TMDB_API_KEY = "5eb8461b85d0d88c46d77cfe5436291f"
+TRAKT_CLIENT_ID = "0b974d6a57bc0c54b5c8888faf253749879b2054f3470b0f70cdde45da8ccb78"
+TRAKT_CLIENT_SECRET = "b4a32e923d357f60d9e195348834b48981ae2efa963143f75050455ee333e2a"
+ADMIN_ID = "6115976248"
+# -----------------------------------------------
+
+# ID del canal de prueba que me enviaste
+TELEGRAM_CHANNEL_ID = -1002139779491 
 BASE_TMDB_URL = "https://api.themoviedb.org/3"
 POSTER_BASE_URL = "https://image.tmdb.org/t/p/w500"
 MOVIES_DB_FILE = "movies.json"
 
 # Constantes para Trakt.tv
-TRAKT_CLIENT_ID = os.getenv("TRAKT_CLIENT_ID")
-TRAKT_CLIENT_SECRET = os.getenv("TRAKT_CLIENT_SECRET")
 TRAKT_BASE_URL = "https://api.trakt.tv"
 
 # Almacenamiento de posts programados y posts recientes
@@ -235,7 +245,7 @@ async def send_movie_post(chat_id, movie_data, movie_link):
 async def start_command(message: types.Message):
     user_id = message.from_user.id
 
-    if user_id == ADMIN_ID:
+    if str(user_id) == ADMIN_ID:
         keyboard = types.ReplyKeyboardMarkup(
             keyboard=[
                 [types.KeyboardButton(text="➕ Agregar película"), types.KeyboardButton(text="📋 Ver catálogo")],
@@ -277,7 +287,7 @@ async def delete_spam_message(message: types.Message):
 
 @dp.message(F.text == "➕ Agregar película")
 async def add_movie_start_by_text(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if str(message.from_user.id) != ADMIN_ID:
         await message.reply("No tienes permiso para esta acción.")
         return
 
@@ -290,7 +300,7 @@ async def add_movie_start_by_text(message: types.Message, state: FSMContext):
 # <--- NUEVA FUNCIÓN: Ver catálogo de películas
 @dp.message(F.text == "📋 Ver catálogo")
 async def view_catalog_by_text(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
+    if str(message.from_user.id) != ADMIN_ID:
         await message.reply("No tienes permiso para esta acción.")
         return
 
@@ -361,7 +371,7 @@ async def publish_from_catalog(callback_query: types.CallbackQuery):
 
 @dp.message(F.text == "📋 Ver películas")
 async def view_movies_by_text(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
+    if str(message.from_user.id) != ADMIN_ID:
         await message.reply("No tienes permiso para esta acción.")
         return
 
@@ -387,7 +397,7 @@ async def view_movies_by_text(message: types.Message):
 
 @dp.message(F.text == "⚙️ Configuración auto-publicación")
 async def auto_post_config(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if str(message.from_user.id) != ADMIN_ID:
         await message.reply("No tienes permiso para esta acción.")
         return
 
@@ -406,14 +416,14 @@ async def set_auto_post_count(callback_query: types.CallbackQuery):
 
     await bot.answer_callback_query(callback_query.id, f"Publicación automática configurada para {AUTO_POST_COUNT} películas al día.")
     await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
+        chat_id=callback_query.message.chat.id.id,
         message_id=callback_query.message.message_id,
         text=f"✅ Publicación automática configurada para {AUTO_POST_COUNT} películas al día."
     )
 
 @dp.message(MovieUploadStates.waiting_for_movie_info)
 async def add_movie_info(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if str(message.from_user.id) != ADMIN_ID:
         await message.reply("No tienes permiso para usar esta función.")
         await state.clear()
         return
@@ -658,7 +668,7 @@ async def process_movie_request(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("publish_now_from_trakt_"))
 async def publish_from_trakt(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_ID:
+    if str(callback_query.from_user.id) != ADMIN_ID:
         await bot.answer_callback_query(callback_query.id, "No tienes permiso para esta acción.")
         return
 
@@ -685,7 +695,7 @@ async def publish_from_trakt(callback_query: types.CallbackQuery, state: FSMCont
 
 @dp.callback_query(F.data.startswith("add_requested_"))
 async def add_requested_movie_callback(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_ID:
+    if str(callback_query.from_user.id) != ADMIN_ID:
         await bot.answer_callback_query(callback_query.id, "No tienes permiso para esta acción.")
         return
 
@@ -708,7 +718,7 @@ async def add_requested_movie_callback(callback_query: types.CallbackQuery, stat
 
 @dp.message(MovieUploadStates.waiting_for_requested_movie_link)
 async def process_requested_movie_link(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if str(message.from_user.id) != ADMIN_ID:
         await message.reply("No tienes permiso para usar esta función.")
         await state.clear()
         return
@@ -756,7 +766,7 @@ async def process_requested_movie_link(message: types.Message, state: FSMContext
 
 @dp.callback_query(F.data.startswith("publish_requested_"))
 async def publish_requested_movie(callback_query: types.CallbackQuery):
-    if callback_query.from_user.id != ADMIN_ID:
+    if str(callback_query.from_user.id) != ADMIN_ID:
         await bot.answer_callback_query(callback_query.id, "No tienes permiso para esta acción.")
         return
 
@@ -795,7 +805,7 @@ async def publish_requested_movie(callback_query: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("notify_user_"))
 async def notify_user(callback_query: types.CallbackQuery):
-    if callback_query.from_user.id != ADMIN_ID:
+    if str(callback_query.from_user.id) != ADMIN_ID:
         await bot.answer_callback_query(callback_query.id, "No tienes permiso para esta acción.")
         return
 
@@ -879,7 +889,6 @@ async def auto_post_task():
         await asyncio.sleep(60)
 
 async def main():
-    keep_alive()
     load_movies_db()
     # Iniciar la tarea de publicación automática
     asyncio.create_task(auto_post_task())
